@@ -51,19 +51,19 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://bleu-oos-rouge.vercel.app",
-        "http://bleu-oos-rouge.vercel.app",
-        "http://authservices-npr8.onrender.com",
-        "http://authservices-npr8.onrender.com",
-        "http://ordering-service-8e9d.onrender.com",
-        "http://ordering-service-8e9d.onrender.com",
-        "http://ims-productservices.onrender.com",
-        "http://ims-productservices.onrender.com",
-        "http://payment-service-nzo0.onrender.com",
-        "http://payment-service-nzo0.onrender.com",
-        "http://bleu-pos-tau.vercel.app",
-        "http://sales-services.onrender.com",  # Add POS service
-        "http://sales-services.onrender.com",
+        "https://bleu-oos-rouge.vercel.app",
+        "https://bleu-oos-rouge.vercel.app",
+        "https://authservices-npr8.onrender.com",
+        "https://authservices-npr8.onrender.com",
+        "https://ordering-service-8e9d.onrender.com",
+        "https://ordering-service-8e9d.onrender.com",
+        "https://ims-productservices.onrender.com",
+        "https://ims-productservices.onrender.com",
+        "https://payment-service-nzo0.onrender.com",
+        "https://payment-service-nzo0.onrender.com",
+        "https://bleu-pos-tau.vercel.app",
+        "https://sales-services.onrender.com",  # Add POS service
+        "https://sales-services.onrender.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -94,6 +94,6 @@ async def root():
 # Run locally
 if __name__ == "__main__":
     import uvicorn
-    print("--- Starting OOS Service on http://127.0.0.1:7004 ---")
+    print("--- Starting OOS Service on https://ordering-service-8e9d.onrender.com ---")
     print("Auto-cancel will start automatically on startup")
     uvicorn.run("main:app", host="127.0.0.1", port=7004, reload=True)

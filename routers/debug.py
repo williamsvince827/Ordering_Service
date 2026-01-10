@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from fastapi.security import OAuth2PasswordBearer
 from services.promo_service import fetch_active_promos
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="http://localhost:4000/auth/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="https://authservices-npr8.onrender.com/auth/token")
 router = APIRouter(prefix="/debug", tags=["Debug"])
 
 @router.get("/promos")
