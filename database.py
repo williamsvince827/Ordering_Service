@@ -1,10 +1,10 @@
 import aioodbc
 
 # database config
-server = 'DESKTOP-FH6B6B4\SQLEXPRESS'
+server = 'umsdb.c7qyig0ucelj.ap-southeast-2.rds.amazonaws.com'
 database = 'OOS'
-username = 'imsadmin'
-password = 'imsadmin'
+username = 'bleuadmin'
+password = 'bleuadmin123'
 driver = 'ODBC Driver 17 for SQL Server'
 
 # async function to get db connection
