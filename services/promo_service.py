@@ -7,7 +7,7 @@ from typing import List, Dict, Optional
 logger = logging.getLogger(__name__)
 
 # POS Promo endpoint
-POS_PROMO_URL = "http://localhost:9002/api/promotions/active"
+POS_PROMO_URL = "https://discountservices-sfvb.onrender.com/api/promotions/active"
 
 # Simple in-memory cache to avoid repeated POS calls
 _PROMOS_CACHE: Optional[List[Dict]] = None
@@ -16,14 +16,15 @@ _PROMOS_TTL_SECONDS = 30.0
 _PROMOS_LOCK = asyncio.Lock()
 
 
-async def fetch_active_promos(token: str) -> List[Dict]:
+async def fetch_active_promos(token: Optional[str]) -> List[Dict]:
     """
     Fetch ACTIVE promotions from POS.
     This function MUST NOT apply any promo logic.
+    Token is optional - for unauthenticated users, pass None.
     """
     global _PROMOS_CACHE, _PROMOS_CACHE_AT
     
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
 
     # Check cache first
     now = time.time()

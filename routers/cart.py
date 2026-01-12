@@ -1275,13 +1275,15 @@ async def update_order_status(
     conn = await get_db_connection()
     cursor = await conn.cursor()
     try:
-        # Check if the order exists
-        await cursor.execute("SELECT OrderID, UserName FROM Orders WHERE OrderID = ?", (order_id,))
+        # Check if the order exists and pre-fetch UserName and ReferenceNumber
+        # MODIFIED LINE: Added ReferenceNumber to the SELECT
+        await cursor.execute("SELECT OrderID, UserName, ReferenceNumber FROM Orders WHERE OrderID = ?", (order_id,))
         order = await cursor.fetchone()
         if not order:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
 
         order_owner = order[1]
+        reference_number = order[2] # Fetch the reference number
 
         # If user is not admin/staff/cashier, check ownership
         if user_role == "user" and order_owner != username:
@@ -1314,11 +1316,48 @@ async def update_order_status(
 
         logger.info(f"Updated status for order {order_id} to {request.new_status}")
 
-        # Get reference number
-        await cursor.execute("SELECT ReferenceNumber FROM Orders WHERE OrderID = ?", (order_id,))
-        ref = await cursor.fetchone()
+        # ----------------------------------------------------------------------
+        # NEW LOGIC: Sync cancellation status to POS if cancelled
+        # ----------------------------------------------------------------------
+        # The new status is 'CANCELLED' AND we have a reference number to sync with POS
+        if request.new_status == "CANCELLED" and reference_number:
+            # NOTE: POS status update endpoint is /auth/purchase_orders/online/{reference_number}/status
+            POS_ORDER_UPDATE_URL = f"https://sales-services.onrender.com/auth/purchase_orders/online/{reference_number}/status"
+            
+            # Use the cashier_name provided in the request (if staff/admin cancelled)
+            # or the logged-in username (if user cancelled their own order)
+            cashier_name_for_pos = request.cashier_name or username
+            
+            async def sync_pos_cancellation():
+                payload = {
+                    "newStatus": "cancelled",
+                    "cashier_name": cashier_name_for_pos
+                }
+                logger.info(f"[POS SYNC] Attempting to sync OOS cancellation for Ref: {reference_number} to URL: {POS_ORDER_UPDATE_URL}")
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        # Use the current OOS token for authentication in the POS service
+                        pos_response = await client.patch(
+                            POS_ORDER_UPDATE_URL,
+                            json=payload,
+                            headers={"Authorization": f"Bearer {token}"}
+                        )
+                        pos_response.raise_for_status()
+                        logger.info(f"✅ POS Status Update successful for Ref: {reference_number}. Response: {pos_response.json()}")
+                except httpx.HTTPStatusError as e:
+                    logger.error(f"❌ POS Status Update failed for Ref: {reference_number}. HTTP Error: {e.response.status_code} - {e.response.text}")
+                except httpx.RequestError as e:
+                    logger.error(f"❌ POS Status Update failed for Ref: {reference_number}. Request Error: {e}")
+                except Exception as e:
+                    logger.error(f"❌ POS Status Update failed for Ref: {reference_number}. General Error: {e}")
 
-        reference_number = ref[0] if ref else f"#{order_id}"
+            # Schedule the sync operation as a background task
+            asyncio.create_task(sync_pos_cancellation())
+            logger.info(f"Scheduled POS cancellation sync for order {order_id} (Ref: {reference_number})")
+        # ----------------------------------------------------------------------
+        
+        # Get reference number (for notification, use the pre-fetched value or a fallback)
+        reference_for_notification = reference_number or f"#{order_id}"
         
         # ✅ Notify customer about the status update
         try:
@@ -1328,7 +1367,7 @@ async def update_order_status(
                     params={
                         "username": order_owner,
                         "title": "Order Update",
-                        "message": f"Your order {reference_number} is now {request.new_status}.",
+                        "message": f"Your order {reference_for_notification} is now {request.new_status}.",
                         "type": "Order",
                         "order_id": order_id
                     }
