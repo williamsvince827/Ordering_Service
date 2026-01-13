@@ -263,7 +263,7 @@ async def get_rider_daily_earnings(
 
 @router.put("/orders/{order_id}/assign-rider")
 async def assign_rider(order_id: int, rider_id: int, token: str = Depends(oauth2_scheme)):
-    await validate_token_and_roles(token, ["admin", "staff"])  
+    await validate_token_and_roles(token, ["admin", "staff"])
 
     conn = await get_db_connection()
     cursor = await conn.cursor()
@@ -480,18 +480,6 @@ async def get_rider_orders(rider_id: int, token: str = Depends(oauth2_scheme)):
     conn = await get_db_connection()
     cursor = await conn.cursor()
     try:
-        # Ensure DeliveryImage column exists
-        try:
-            await cursor.execute("""
-                IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Orders') AND name = 'DeliveryImage')
-                BEGIN
-                    ALTER TABLE Orders ADD DeliveryImage NVARCHAR(512) NULL
-                END
-            """)
-            await conn.commit()
-        except Exception as e:
-            logger.warning(f"Failed to create DeliveryImage column: {e}")
-        
         await cursor.execute("""
             SELECT
                 o.OrderID, o.UserName, o.OrderDate, o.Status, o.PaymentMethod,
@@ -589,26 +577,20 @@ async def get_rider_orders(rider_id: int, token: str = Depends(oauth2_scheme)):
 
 # --- GET Delivery Orders with Items + Delivery Info (OPTIMIZED) ---
 @router.get("/admin/delivery/orders")
-async def get_delivery_orders(token: str = Depends(oauth2_scheme)):
+async def get_delivery_orders(
+    page: int = Query(1, ge=1),
+    limit: int = Query(12, ge=1, le=50),
+    token: str = Depends(oauth2_scheme)
+):
     await validate_token_and_roles(token, ["admin", "staff"])
+
+    offset = (page - 1) * limit
 
     conn = await get_db_connection()
     cursor = await conn.cursor()
 
     try:
-        # Ensure DeliveryImage column exists
-        try:
-            await cursor.execute("""
-                IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Orders') AND name = 'DeliveryImage')
-                BEGIN
-                    ALTER TABLE Orders ADD DeliveryImage NVARCHAR(512) NULL
-                END
-            """)
-            await conn.commit()
-        except Exception as e:
-            logger.warning(f"Failed to create DeliveryImage column: {e}")
-        
-        # Step 1: Fetch all orders
+        # Step 1: Fetch paginated orders
         await cursor.execute("""
             SELECT
                 o.OrderID, o.UserName, o.OrderDate, o.Status, o.PaymentMethod,
@@ -619,14 +601,15 @@ async def get_delivery_orders(token: str = Depends(oauth2_scheme)):
             LEFT JOIN DeliveryInfo di ON o.OrderID = di.OrderID
             WHERE o.OrderType = 'Delivery'
             ORDER BY o.OrderDate DESC
-        """)
+            OFFSET ? ROWS
+            FETCH NEXT ? ROWS ONLY
+        """, (offset, limit))
         rows = await cursor.fetchall()
-        
+
         if not rows:
             return []
-        
+
         order_ids = [row[0] for row in rows]
-        order_dict = {row[0]: row for row in rows}
 
         # Step 2: Fetch ALL items for ALL orders in ONE query
         order_ids_str = ','.join(str(oid) for oid in order_ids)
