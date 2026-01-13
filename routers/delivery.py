@@ -11,11 +11,11 @@ import asyncio
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="http://localhost:4000/auth/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="https://authservices-npr8.onrender.com/auth/token")
 
 # --- AUTH VALIDATOR ---
 async def validate_token_and_roles(token: str, allowed_roles: list[str]):
-    USER_SERVICE_ME_URL = "http://localhost:4000/auth/users/me"
+    USER_SERVICE_ME_URL = "https://authservices-npr8.onrender.com/auth/users/me"
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(USER_SERVICE_ME_URL, headers={"Authorization": f"Bearer {token}"})
@@ -434,7 +434,7 @@ async def update_delivery_order_status(
                 if request.status.strip().lower() == "pickedup" and rider_id:
                     try:
                         async with httpx.AsyncClient() as client:
-                            rider_res = await client.get(f"http://localhost:4000/users/riders/{rider_id}")
+                            rider_res = await client.get(f"https://authservices-npr8.onrender.com/users/riders/{rider_id}")
                             if rider_res.status_code == 200:
                                 rider = rider_res.json()
                                 rider_name = rider.get("FullName", "your rider")
@@ -445,7 +445,7 @@ async def update_delivery_order_status(
                 # Send notification to Notification microservice
                 async with httpx.AsyncClient() as client:
                     await client.post(
-                        "http://localhost:7002/notifications/create",
+                        "https://notification-service-vbs9.onrender.com/notifications/create",
                         params={
                             "username": username,
                             "title": notif_title,
@@ -549,7 +549,7 @@ async def get_rider_orders(rider_id: int, token: str = Depends(oauth2_scheme)):
                 # Fetch from user service
                 try:
                     async with httpx.AsyncClient() as client:
-                        response = await client.get(f"http://localhost:4000/users/{username}")
+                        response = await client.get(f"https://authservices-npr8.onrender.com/users/{username}")
                         if response.status_code == 200:
                             user_data = response.json()
                             first_name = user_data.get("firstName") or ""
@@ -676,7 +676,7 @@ async def get_delivery_orders(token: str = Depends(oauth2_scheme)):
             try:
                 async with httpx.AsyncClient(timeout=5.0) as client:
                     # Batch fetch all riders
-                    tasks = [client.get(f"http://localhost:4000/users/riders/{rid}") for rid in unique_rider_ids]
+                    tasks = [client.get(f"https://authservices-npr8.onrender.com0/users/riders/{rid}") for rid in unique_rider_ids]
                     responses = await asyncio.gather(*tasks, return_exceptions=True)
                     
                     for rid, response in zip(unique_rider_ids, responses):
@@ -859,7 +859,7 @@ async def get_aggregated_rider_earnings(filter: str, token: str = Depends(oauth2
         for rider_id, earnings in rider_totals.items():
             try:
                 async with httpx.AsyncClient() as client:
-                    response = await client.get(f"http://localhost:4000/users/riders/{rider_id}")
+                    response = await client.get(f"https://authservices-npr8.onrender.com/users/riders/{rider_id}")
                     if response.status_code == 200:
                         rider_data = response.json()
                         name = rider_data.get("FullName", f"Rider {rider_id}")

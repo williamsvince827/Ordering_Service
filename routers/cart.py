@@ -17,11 +17,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="http://localhost:4000/auth/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="https://authservices-npr8.onrender.com/auth/token")
 
 
 async def validate_token_and_roles(token: str, allowed_roles: List[str]):
-    USER_SERVICE_ME_URL = "http://localhost:4000/auth/users/me"
+    USER_SERVICE_ME_URL = "https://authservices-npr8.onrender.com/auth/users/me"
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(USER_SERVICE_ME_URL, headers={"Authorization": f"Bearer {token}"})
@@ -206,7 +206,7 @@ async def get_all_orders(token: str = Depends(oauth2_scheme)):
                     try:
                         # Auth/User service likely mounts user routes under /users
                         resp = await client.get(
-                            "http://localhost:4000/users/employee_name",
+                            "https://authservices-npr8.onrender.com/users/employee_name",
                             params={"username": uname},
                             headers={"Authorization": f"Bearer {token}"}
                         )
@@ -918,7 +918,7 @@ async def update_payment_details(payload: UpdatePaymentDetails, token: str = Dep
         try:
             async with httpx.AsyncClient() as client:
                 await client.post(
-                    "http://localhost:7002/notifications/notifications/create",
+                    "https://notification-service-vbs9.onrender.com/notifications/notifications/create",
                     params={
                         "username": payload.username,
                         "title": "Order Placed",
@@ -1322,7 +1322,7 @@ async def update_order_status(
         # The new status is 'CANCELLED' AND we have a reference number to sync with POS
         if request.new_status == "CANCELLED" and reference_number:
             # NOTE: POS status update endpoint is /auth/purchase_orders/online/{reference_number}/status
-            POS_ORDER_UPDATE_URL = f"http://localhost:9000/auth/purchase_orders/online/{reference_number}/status"
+            POS_ORDER_UPDATE_URL = f"https://sales-services.onrender.com/auth/purchase_orders/online/{reference_number}/status"
             
             # Use the cashier_name provided in the request (if staff/admin cancelled)
             # or the logged-in username (if user cancelled their own order)
@@ -1363,7 +1363,7 @@ async def update_order_status(
         try:
             async with httpx.AsyncClient() as client:
                 await client.post(
-                    "http://localhost:7002/notifications/notifications/create",
+                    "https://notification-service-vbs9.onrender.com/notifications/notifications/create",
                     params={
                         "username": order_owner,
                         "title": "Order Update",
@@ -1489,7 +1489,7 @@ async def auto_cancel_order_by_reference(
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 await client.post(
-                    "http://localhost:7002/notifications/notifications/create",
+                    "https://notification-service-vbs9.onrender.com/notifications/notifications/create",
                     params={
                         "username": username,
                         "title": "Order Automatically Cancelled",
@@ -1568,7 +1568,7 @@ async def auto_cancel_expired_oos_orders():
                         try:
                             async with httpx.AsyncClient(timeout=10.0) as client:
                                 await client.post(
-                                    "http://localhost:7002/notifications/notifications/create",
+                                    "https://notification-service-vbs9.onrender.com/notifications/notifications/create",
                                     params={
                                         "username": username,
                                         "title": "Order Automatically Cancelled",
