@@ -64,6 +64,7 @@ app.add_middleware(
         "https://bleu-pos-tau.vercel.app",
         "https://sales-services.onrender.com",  # Add POS service
         "https://sales-services.onrender.com",
+        "https://authservices-npr8.onrender.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],
