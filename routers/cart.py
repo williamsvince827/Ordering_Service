@@ -17,35 +17,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="https://authservices-npr8.onrender.com/auth/token")
-
-EMPLOYEE_NAME_CACHE = {}
-
-async def get_employee_name(username: str) -> str:
-    if username in EMPLOYEE_NAME_CACHE:
-        return EMPLOYEE_NAME_CACHE[username]
-
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            res = await client.get(
-                f"https://authservices-npr8.onrender.com/users/employees/{username}"
-            )
-
-            if res.status_code == 200:
-                name = res.json().get("fullName", username)
-                EMPLOYEE_NAME_CACHE[username] = name
-                return name
-
-            EMPLOYEE_NAME_CACHE[username] = username
-            return username
-
-    except Exception:
-        EMPLOYEE_NAME_CACHE[username] = username
-        return username
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="http://localhost:4000/auth/token")
 
 
 async def validate_token_and_roles(token: str, allowed_roles: List[str]):
-    USER_SERVICE_ME_URL = "https://authservices-npr8.onrender.com/auth/users/me"
+    USER_SERVICE_ME_URL = "http://localhost:4000/auth/users/me"
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(USER_SERVICE_ME_URL, headers={"Authorization": f"Bearer {token}"})
@@ -223,12 +199,31 @@ async def get_all_orders(token: str = Depends(oauth2_scheme)):
         # Step 4: Build response
         # Fallback: fetch user profile names via auth service endpoint when DeliveryInfo names are absent
         name_lookup_usernames = [row[1] for row in orders_data if not row[16] and not row[17]]
-        user_full_names = {}
+        user_name_map = {}
         if name_lookup_usernames:
-            for uname in set(name_lookup_usernames):
-                full_name = await get_employee_name(uname)
-                if full_name != uname:
-                    user_full_names[uname] = full_name
+            async with httpx.AsyncClient() as client:
+                for uname in set(name_lookup_usernames):
+                    try:
+                        # Auth/User service likely mounts user routes under /users
+                        resp = await client.get(
+                            "http://localhost:4000/users/employee_name",
+                            params={"username": uname},
+                            headers={"Authorization": f"Bearer {token}"}
+                        )
+                        if resp.status_code == 200:
+                            payload = resp.json()
+                            full = payload.get("employee_name", "").strip()
+                            logger.info(f"[NameFallback] Got full name '{full}' for username '{uname}'")
+                            if full:
+                                parts = full.split()
+                                fn = parts[0] if parts else ""
+                                ln = parts[-1] if len(parts) > 1 else ""
+                                if fn or ln:
+                                    user_name_map[uname] = (fn, ln)
+                        else:
+                            logger.warning(f"[NameFallback] Non-200 {resp.status_code} for username '{uname}' body={resp.text}")
+                    except Exception as e:
+                        logger.warning(f"[NameFallback] fetch failed for {uname}: {e}")
 
         orders = []
         for row in orders_data:
@@ -266,9 +261,11 @@ async def get_all_orders(token: str = Depends(oauth2_scheme)):
 
             first_name = row[16]
             last_name = row[17]
+            if (not first_name and not last_name) and row[1] in user_name_map:
+                fetched_fn, fetched_ln = user_name_map[row[1]]
+                first_name = first_name or fetched_fn
+                last_name = last_name or fetched_ln
             combined_name = (f"{first_name} {last_name}".strip() if first_name and last_name else None)
-            if not combined_name and row[1] in user_full_names:
-                combined_name = user_full_names[row[1]]
             normalized_order_type = 'Pickup' if str(row[3]).lower().startswith('pick') else row[3]
             orders.append({
                 "order_id": row[0],
@@ -921,7 +918,7 @@ async def update_payment_details(payload: UpdatePaymentDetails, token: str = Dep
         try:
             async with httpx.AsyncClient() as client:
                 await client.post(
-                    "https://notification-service-vbs9.onrender.com/notifications/notifications/create",
+                    "http://localhost:7002/notifications/notifications/create",
                     params={
                         "username": payload.username,
                         "title": "Order Placed",
@@ -1325,7 +1322,7 @@ async def update_order_status(
         # The new status is 'CANCELLED' AND we have a reference number to sync with POS
         if request.new_status == "CANCELLED" and reference_number:
             # NOTE: POS status update endpoint is /auth/purchase_orders/online/{reference_number}/status
-            POS_ORDER_UPDATE_URL = f"https://sales-services.onrender.com/auth/purchase_orders/online/{reference_number}/status"
+            POS_ORDER_UPDATE_URL = f"http://localhost:9000/auth/purchase_orders/online/{reference_number}/status"
             
             # Use the cashier_name provided in the request (if staff/admin cancelled)
             # or the logged-in username (if user cancelled their own order)
@@ -1366,7 +1363,7 @@ async def update_order_status(
         try:
             async with httpx.AsyncClient() as client:
                 await client.post(
-                    "https://notification-service-vbs9.onrender.com/notifications/notifications/create",
+                    "http://localhost:7002/notifications/notifications/create",
                     params={
                         "username": order_owner,
                         "title": "Order Update",
@@ -1492,7 +1489,7 @@ async def auto_cancel_order_by_reference(
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 await client.post(
-                    "https://notification-service-vbs9.onrender.com/notifications/notifications/create",
+                    "http://localhost:7002/notifications/notifications/create",
                     params={
                         "username": username,
                         "title": "Order Automatically Cancelled",
@@ -1571,7 +1568,7 @@ async def auto_cancel_expired_oos_orders():
                         try:
                             async with httpx.AsyncClient(timeout=10.0) as client:
                                 await client.post(
-                                    "https://notification-service-vbs9.onrender.com/notifications/notifications/create",
+                                    "http://localhost:7002/notifications/notifications/create",
                                     params={
                                         "username": username,
                                         "title": "Order Automatically Cancelled",

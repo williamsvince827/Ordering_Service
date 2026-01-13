@@ -11,11 +11,11 @@ import asyncio
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="https://authservices-npr8.onrender.com/auth/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="http://localhost:4000/auth/token")
 
 # --- AUTH VALIDATOR ---
 async def validate_token_and_roles(token: str, allowed_roles: list[str]):
-    USER_SERVICE_ME_URL = "https://authservices-npr8.onrender.com/auth/users/me"
+    USER_SERVICE_ME_URL = "http://localhost:4000/auth/users/me"
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(USER_SERVICE_ME_URL, headers={"Authorization": f"Bearer {token}"})
@@ -263,7 +263,7 @@ async def get_rider_daily_earnings(
 
 @router.put("/orders/{order_id}/assign-rider")
 async def assign_rider(order_id: int, rider_id: int, token: str = Depends(oauth2_scheme)):
-    await validate_token_and_roles(token, ["admin", "staff"])
+    await validate_token_and_roles(token, ["admin", "staff"])  
 
     conn = await get_db_connection()
     cursor = await conn.cursor()
@@ -434,7 +434,7 @@ async def update_delivery_order_status(
                 if request.status.strip().lower() == "pickedup" and rider_id:
                     try:
                         async with httpx.AsyncClient() as client:
-                            rider_res = await client.get(f"https://authservices-npr8.onrender.com/users/riders/{rider_id}")
+                            rider_res = await client.get(f"http://localhost:4000/users/riders/{rider_id}")
                             if rider_res.status_code == 200:
                                 rider = rider_res.json()
                                 rider_name = rider.get("FullName", "your rider")
@@ -445,7 +445,7 @@ async def update_delivery_order_status(
                 # Send notification to Notification microservice
                 async with httpx.AsyncClient() as client:
                     await client.post(
-                        "https://notification-service-vbs9.onrender.com/notifications/create",
+                        "http://localhost:7002/notifications/create",
                         params={
                             "username": username,
                             "title": notif_title,
@@ -480,6 +480,18 @@ async def get_rider_orders(rider_id: int, token: str = Depends(oauth2_scheme)):
     conn = await get_db_connection()
     cursor = await conn.cursor()
     try:
+        # Ensure DeliveryImage column exists
+        try:
+            await cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Orders') AND name = 'DeliveryImage')
+                BEGIN
+                    ALTER TABLE Orders ADD DeliveryImage NVARCHAR(512) NULL
+                END
+            """)
+            await conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to create DeliveryImage column: {e}")
+        
         await cursor.execute("""
             SELECT
                 o.OrderID, o.UserName, o.OrderDate, o.Status, o.PaymentMethod,
@@ -537,7 +549,7 @@ async def get_rider_orders(rider_id: int, token: str = Depends(oauth2_scheme)):
                 # Fetch from user service
                 try:
                     async with httpx.AsyncClient() as client:
-                        response = await client.get(f"https://authservices-npr8.onrender.com/users/{username}")
+                        response = await client.get(f"http://localhost:4000/users/{username}")
                         if response.status_code == 200:
                             user_data = response.json()
                             first_name = user_data.get("firstName") or ""
@@ -577,20 +589,26 @@ async def get_rider_orders(rider_id: int, token: str = Depends(oauth2_scheme)):
 
 # --- GET Delivery Orders with Items + Delivery Info (OPTIMIZED) ---
 @router.get("/admin/delivery/orders")
-async def get_delivery_orders(
-    page: int = Query(1, ge=1),
-    limit: int = Query(12, ge=1, le=50),
-    token: str = Depends(oauth2_scheme)
-):
+async def get_delivery_orders(token: str = Depends(oauth2_scheme)):
     await validate_token_and_roles(token, ["admin", "staff"])
-
-    offset = (page - 1) * limit
 
     conn = await get_db_connection()
     cursor = await conn.cursor()
 
     try:
-        # Step 1: Fetch paginated orders
+        # Ensure DeliveryImage column exists
+        try:
+            await cursor.execute("""
+                IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Orders') AND name = 'DeliveryImage')
+                BEGIN
+                    ALTER TABLE Orders ADD DeliveryImage NVARCHAR(512) NULL
+                END
+            """)
+            await conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to create DeliveryImage column: {e}")
+        
+        # Step 1: Fetch all orders
         await cursor.execute("""
             SELECT
                 o.OrderID, o.UserName, o.OrderDate, o.Status, o.PaymentMethod,
@@ -601,15 +619,14 @@ async def get_delivery_orders(
             LEFT JOIN DeliveryInfo di ON o.OrderID = di.OrderID
             WHERE o.OrderType = 'Delivery'
             ORDER BY o.OrderDate DESC
-            OFFSET ? ROWS
-            FETCH NEXT ? ROWS ONLY
-        """, (offset, limit))
+        """)
         rows = await cursor.fetchall()
-
+        
         if not rows:
             return []
-
+        
         order_ids = [row[0] for row in rows]
+        order_dict = {row[0]: row for row in rows}
 
         # Step 2: Fetch ALL items for ALL orders in ONE query
         order_ids_str = ','.join(str(oid) for oid in order_ids)
@@ -652,7 +669,26 @@ async def get_delivery_orders(
                     "addon_id": addon[3]
                 })
 
-        # Step 4: Build response
+        # Step 4: Fetch ALL unique rider info in BATCH
+        unique_rider_ids = list(set(row[15] for row in rows if row[15]))
+        riders_cache = {}
+        if unique_rider_ids:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    # Batch fetch all riders
+                    tasks = [client.get(f"http://localhost:4000/users/riders/{rid}") for rid in unique_rider_ids]
+                    responses = await asyncio.gather(*tasks, return_exceptions=True)
+                    
+                    for rid, response in zip(unique_rider_ids, responses):
+                        if isinstance(response, Exception):
+                            logger.warning(f"Failed to fetch rider {rid}: {response}")
+                            continue
+                        if response.status_code == 200:
+                            riders_cache[rid] = response.json()
+            except Exception as e:
+                logger.warning(f"Batch rider fetch failed: {e}")
+
+        # Step 5: Build response
         orders = []
         for row in rows:
             order_id = row[0]
@@ -664,26 +700,29 @@ async def get_delivery_orders(
             for item in items:
                 order_item_id = item[1]
                 addons_list = addons_by_item.get(order_item_id, [])
-
+                
                 # Extract promo information
                 promo_name = item[5] if len(item) > 5 and item[5] else None
                 promo_discount = float(item[8]) if len(item) > 8 and item[8] else 0.0
-
+                
                 item_dict = {
                     "name": item[2],
                     "quantity": item[3],
                     "price": float(item[4]),
                     "addons": addons_list
                 }
-
+                
                 # Add promo fields if they exist
                 if promo_name:
                     item_dict["promo_name"] = promo_name
                     item_dict["applied_promo"] = promo_name
                 if promo_discount > 0:
                     item_dict["discount"] = promo_discount
-
+                
                 item_list.append(item_dict)
+
+            # Get cached rider info
+            rider_info = riders_cache.get(assigned_rider_id)
 
             # Handle customer info
             first_name = row[6] or ""
@@ -707,7 +746,7 @@ async def get_delivery_orders(
                 "items": item_list,
                 "assignedRider": str(assigned_rider_id) if assigned_rider_id else None,
                 "discount": float(row[16]) if row[16] else 0,
-                "deliveryFee": row[17] if row[17] else 0,
+                "deliveryFee": float(row[17]) if row[17] else 0,
                 "deliveryImage": row[18] if len(row) > 18 and row[18] else None
             })
 
@@ -815,28 +854,19 @@ async def get_aggregated_rider_earnings(filter: str, token: str = Depends(oauth2
         rider_rows = await cursor.fetchall()
         rider_totals = {row[0]: float(row[1]) for row in rider_rows if row[0]}
 
-        # Get rider names concurrently
+        # Get rider names
         top_riders = []
-        if rider_totals:
+        for rider_id, earnings in rider_totals.items():
             try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    tasks = [client.get(f"https://authservices-npr8.onrender.com/users/riders/{rid}") for rid in rider_totals.keys()]
-                    responses = await asyncio.gather(*tasks, return_exceptions=True)
-
-                    for (rider_id, earnings), response in zip(rider_totals.items(), responses):
-                        if isinstance(response, Exception):
-                            logger.warning(f"Failed to fetch rider {rider_id}: {response}")
-                            name = f"Rider {rider_id}"
-                        elif response.status_code == 200:
-                            rider_data = response.json()
-                            name = rider_data.get("FullName", f"Rider {rider_id}")
-                        else:
-                            name = f"Rider {rider_id}"
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(f"http://localhost:4000/users/riders/{rider_id}")
+                    if response.status_code == 200:
+                        rider_data = response.json()
+                        name = rider_data.get("FullName", f"Rider {rider_id}")
                         top_riders.append({"name": name, "earnings": earnings})
             except Exception as e:
-                logger.warning(f"Batch rider fetch failed: {e}")
-                for rider_id, earnings in rider_totals.items():
-                    top_riders.append({"name": f"Rider {rider_id}", "earnings": earnings})
+                logger.warning(f"Failed to fetch rider info for {rider_id}: {e}")
+                top_riders.append({"name": f"Rider {rider_id}", "earnings": earnings})
 
         top_riders.sort(key=lambda x: x['earnings'], reverse=True)
         top_riders = top_riders[:10]
