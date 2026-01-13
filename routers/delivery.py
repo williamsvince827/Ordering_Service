@@ -652,26 +652,7 @@ async def get_delivery_orders(
                     "addon_id": addon[3]
                 })
 
-        # Step 4: Fetch ALL unique rider info in BATCH
-        unique_rider_ids = list(set(row[15] for row in rows if row[15]))
-        riders_cache = {}
-        if unique_rider_ids:
-            try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    # Batch fetch all riders
-                    tasks = [client.get(f"https://authservices-npr8.onrender.com/users/riders/{rid}") for rid in unique_rider_ids]
-                    responses = await asyncio.gather(*tasks, return_exceptions=True)
-                    
-                    for rid, response in zip(unique_rider_ids, responses):
-                        if isinstance(response, Exception):
-                            logger.warning(f"Failed to fetch rider {rid}: {response}")
-                            continue
-                        if response.status_code == 200:
-                            riders_cache[rid] = response.json()
-            except Exception as e:
-                logger.warning(f"Batch rider fetch failed: {e}")
-
-        # Step 5: Build response
+        # Step 4: Build response
         orders = []
         for row in rows:
             order_id = row[0]
@@ -683,29 +664,26 @@ async def get_delivery_orders(
             for item in items:
                 order_item_id = item[1]
                 addons_list = addons_by_item.get(order_item_id, [])
-                
+
                 # Extract promo information
                 promo_name = item[5] if len(item) > 5 and item[5] else None
                 promo_discount = float(item[8]) if len(item) > 8 and item[8] else 0.0
-                
+
                 item_dict = {
                     "name": item[2],
                     "quantity": item[3],
                     "price": float(item[4]),
                     "addons": addons_list
                 }
-                
+
                 # Add promo fields if they exist
                 if promo_name:
                     item_dict["promo_name"] = promo_name
                     item_dict["applied_promo"] = promo_name
                 if promo_discount > 0:
                     item_dict["discount"] = promo_discount
-                
-                item_list.append(item_dict)
 
-            # Get cached rider info
-            rider_info = riders_cache.get(assigned_rider_id)
+                item_list.append(item_dict)
 
             # Handle customer info
             first_name = row[6] or ""
@@ -729,7 +707,7 @@ async def get_delivery_orders(
                 "items": item_list,
                 "assignedRider": str(assigned_rider_id) if assigned_rider_id else None,
                 "discount": float(row[16]) if row[16] else 0,
-                "deliveryFee": float(row[17]) if row[17] else 0,
+                "deliveryFee": row[17] if row[17] else 0,
                 "deliveryImage": row[18] if len(row) > 18 and row[18] else None
             })
 
@@ -837,19 +815,28 @@ async def get_aggregated_rider_earnings(filter: str, token: str = Depends(oauth2
         rider_rows = await cursor.fetchall()
         rider_totals = {row[0]: float(row[1]) for row in rider_rows if row[0]}
 
-        # Get rider names
+        # Get rider names concurrently
         top_riders = []
-        for rider_id, earnings in rider_totals.items():
+        if rider_totals:
             try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(f"https://authservices-npr8.onrender.com/users/riders/{rider_id}")
-                    if response.status_code == 200:
-                        rider_data = response.json()
-                        name = rider_data.get("FullName", f"Rider {rider_id}")
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    tasks = [client.get(f"https://authservices-npr8.onrender.com/users/riders/{rid}") for rid in rider_totals.keys()]
+                    responses = await asyncio.gather(*tasks, return_exceptions=True)
+
+                    for (rider_id, earnings), response in zip(rider_totals.items(), responses):
+                        if isinstance(response, Exception):
+                            logger.warning(f"Failed to fetch rider {rider_id}: {response}")
+                            name = f"Rider {rider_id}"
+                        elif response.status_code == 200:
+                            rider_data = response.json()
+                            name = rider_data.get("FullName", f"Rider {rider_id}")
+                        else:
+                            name = f"Rider {rider_id}"
                         top_riders.append({"name": name, "earnings": earnings})
             except Exception as e:
-                logger.warning(f"Failed to fetch rider info for {rider_id}: {e}")
-                top_riders.append({"name": f"Rider {rider_id}", "earnings": earnings})
+                logger.warning(f"Batch rider fetch failed: {e}")
+                for rider_id, earnings in rider_totals.items():
+                    top_riders.append({"name": f"Rider {rider_id}", "earnings": earnings})
 
         top_riders.sort(key=lambda x: x['earnings'], reverse=True)
         top_riders = top_riders[:10]
